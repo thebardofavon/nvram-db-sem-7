@@ -1,0 +1,100 @@
+# How to Set Up a Devdax Namespace for 2GB of RAM
+# Date: April 08, 2025
+# Assumptions: Debian system with 16GB RAM, reserving 2GB at 12GB-14GB
+
+## Step 1: Reserve 2GB of RAM
+# Modify GRUB to reserve 2GB from 12GB to 14GB (avoiding gaps seen at 14GB)
+1. Open GRUB config:
+   sudo nano /etc/default/grub
+
+2. Edit the GRUB_CMDLINE_LINUX_DEFAULT line:
+   GRUB_CMDLINE_LINUX_DEFAULT="quiet memmap=2G!12G"
+   # 12GB (0x300000000) to 14GB (0x37fffffff)
+
+3. Update GRUB:
+   sudo update-grub
+
+4. Reboot:
+   sudo reboot
+
+5. Verify reservation:
+   sudo cat /proc/iomem | grep -A 5 "300000000"
+   # Expect: 300000000-37fffffff : Persistent Memory (legacy) or reserved
+   free -h
+   # Expect: ~14GiB total memory (16GB - 2GB)
+
+## Step 2: Install ndctl
+1. Install ndctl:
+   sudo apt-get update
+   sudo apt-get install ndctl
+
+## Step 3: Configure Devdax Namespace
+1. Load PMEM module (if needed):
+   sudo modprobe nd_pmem
+
+2. List available regions:
+   sudo ndctl list -R
+   # Look for a 2GB region (size: 2147483648 bytes)
+
+3. If no 2GB region or split regions:
+   # Ensure the reservation is contiguous (Step 1 should handle this)
+   sudo cat /proc/iomem | grep -A 5 "300000000"
+
+4. Create devdax namespace:
+   sudo ndctl create-namespace --mode=devdax --size=2G --region=regionX
+   # Replace regionX with the 2GB region's name (e.g., region0)
+   # Or use --map=mem if region isn’t listed:
+   # sudo ndctl create-namespace --mode=devdax --map=mem --size=2G
+
+5. Verify:
+   sudo ndctl list
+   # Expect:
+   # {
+   #   "dev":"namespace0.0",
+   #   "mode":"devdax",
+   #   "size":2147483648,
+   #   "blockdev":"dax0.0"
+   # }
+
+## Step 4: Troubleshoot Issues
+1. If namespace creation fails:
+   # Check for existing namespaces:
+   sudo ndctl list
+   # Destroy them if present:
+   sudo ndctl disable-namespace namespace0.0
+   sudo ndctl destroy-namespace namespace0.0
+   # Retry creation
+
+2. If regions are split (e.g., 1.37GB + 774MB):
+   # Adjust memmap to a contiguous range (e.g., 2G!12G) and reboot
+
+3. Confirm device exists:
+   ls -l /dev/dax0.0
+   # Should show a character device
+
+## Step 5: Use the Devdax Device
+1. Build and run the provided C code:
+   make
+   make run_save    # Writes data and saves to disk
+   make run_restore # Restores data from disk to devdax
+
+2. Automate restore on boot:
+   sudo mv restore_dax /usr/local/bin/
+   sudo nano /etc/systemd/system/restore-dax.service
+   # Add:
+   # [Unit]
+   # Description=Restore devdax on boot
+   # After=network.target
+   # [Service]
+   # ExecStart=/usr/local/bin/restore_dax
+   # Type=oneshot
+   # RemainAfterExit=yes
+   # [Install]
+   # WantedBy=multi-user.target
+   sudo systemctl enable restore-dax.service
+
+## Notes
+- Run commands as root (sudo) where needed.
+- Adjust BACKUP_PATH in C code to a valid path.
+- If errors persist, check dmesg for kernel messages:
+  sudo dmesg | grep -i "memory"
