@@ -262,92 +262,92 @@ bool db_abort_transaction(int txn_id)
 }
 
 // --- Row Operations (with Undo Logging) ---
-bool db_put_row(Table *table, int txn_id, int key, void *data, size_t size)
-{
-    pthread_rwlock_rdlock(&g_checkpoint_lock); // Acquire read lock
-    if (!table || !table->is_open || !lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) || !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE))
-    {
-        pthread_rwlock_unlock(&g_checkpoint_lock);
-        return false;
-    }
-    // ... (rest of the function is the same, but add undo logging)
-    void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
-    NVRAMPtr nvram_data = allocate_memory(size);
+// bool db_put_row(Table *table, int txn_id, int key, void *data, size_t size)
+// {
+//     pthread_rwlock_rdlock(&g_checkpoint_lock); // Acquire read lock
+//     if (!table || !table->is_open || !lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) || !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE))
+//     {
+//         pthread_rwlock_unlock(&g_checkpoint_lock);
+//         return false;
+//     }
+//     // ... (rest of the function is the same, but add undo logging)
+//     void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
+//     NVRAMPtr nvram_data = allocate_memory(size);
     
-    if (!wal_entry_ptr || !nvram_data)
-    {
-        // Handle allocation failure
-        if (wal_entry_ptr)
-            free_memory(wal_entry_ptr, sizeof(WALEntry));
-        if (nvram_data)
-            free_memory(nvram_data, size);
-        return false;
-    }
+//     if (!wal_entry_ptr || !nvram_data)
+//     {
+//         // Handle allocation failure
+//         if (wal_entry_ptr)
+//             free_memory(wal_entry_ptr, sizeof(WALEntry));
+//         if (nvram_data)
+//             free_memory(nvram_data, size);
+//         return false;
+//     }
 
-    memcpy(nvram_data, data, size);
-    flush_range(nvram_data, size);
+//     memcpy(nvram_data, data, size);
+//     flush_range(nvram_data, size);
 
-    if (!wal_add_entry(table->table_id, key, nvram_data, WAL_INSERT, wal_entry_ptr, size))
-    {
-        free_memory(nvram_data, size);
-        free_memory(wal_entry_ptr, sizeof(WALEntry));
-        return false;
-    }
+//     if (!wal_add_entry(table->table_id, key, nvram_data, WAL_INSERT, wal_entry_ptr, size))
+//     {
+//         free_memory(nvram_data, size);
+//         free_memory(wal_entry_ptr, sizeof(WALEntry));
+//         return false;
+//     }
 
-    // NEW: Add to undo log
-    transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
+//     // NEW: Add to undo log
+//     transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
 
-    // ... (rest of insert logic)
-    bool result = false;
-    int up_key;
-    BPTreeNode *new_node = NULL;
-    if (insert_recursive(table->index, table->index->root, key, nvram_data, size, &up_key, &new_node))
-    {
-        // ... (handle root split)
-        result = true;
-    }
+//     // ... (rest of insert logic)
+//     bool result = false;
+//     int up_key;
+//     BPTreeNode *new_node = NULL;
+//     if (insert_recursive(table->index, table->index->root, key, nvram_data, size, &up_key, &new_node))
+//     {
+//         // ... (handle root split)
+//         result = true;
+//     }
 
-    pthread_rwlock_unlock(&g_checkpoint_lock);
-    return result;
-}
+//     pthread_rwlock_unlock(&g_checkpoint_lock);
+//     return result;
+// }
 
-bool db_delete_row(Table *table, int txn_id, int key)
-{
-    pthread_rwlock_rdlock(&g_checkpoint_lock);
-    if (!table || !table->is_open || !lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) || !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE))
-    {
-        pthread_rwlock_unlock(&g_checkpoint_lock);
-        return false;
-    }
+// bool db_delete_row(Table *table, int txn_id, int key)
+// {
+//     pthread_rwlock_rdlock(&g_checkpoint_lock);
+//     if (!table || !table->is_open || !lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) || !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE))
+//     {
+//         pthread_rwlock_unlock(&g_checkpoint_lock);
+//         return false;
+//     }
 
-    BPTreeNode *leaf = find_leaf(table->index, key);
-    int pos = find_key_in_leaf(leaf, key);
-    if (pos == -1)
-        return false; // Not found
+//     BPTreeNode *leaf = find_leaf(table->index, key);
+//     int pos = find_key_in_leaf(leaf, key);
+//     if (pos == -1)
+//         return false; // Not found
     
-    size_t data_size;
-    void *data_ptr;
+//     size_t data_size;
+//     void *data_ptr;
 
 
-    void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
-    if (!wal_entry_ptr)
-        return false;
+//     void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
+//     if (!wal_entry_ptr)
+//         return false;
 
-    // The data_ptr and data_size are the "before image" for the undo log
-    if (!wal_add_entry(table->table_id, key, data_ptr, WAL_DELETE, wal_entry_ptr, data_size))
-    {
-        free_memory(wal_entry_ptr, sizeof(WALEntry));
-        return false;
-    }
+//     // The data_ptr and data_size are the "before image" for the undo log
+//     if (!wal_add_entry(table->table_id, key, data_ptr, WAL_DELETE, wal_entry_ptr, data_size))
+//     {
+//         free_memory(wal_entry_ptr, sizeof(WALEntry));
+//         return false;
+//     }
 
-    // NEW: Add to undo log
-    transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
+//     // NEW: Add to undo log
+//     transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
 
-    bool result = remove_recursive(table->index, table->index->root, key, NULL, 0);
+//     bool result = remove_recursive(table->index, table->index->root, key, NULL, 0);
 
-    pthread_rwlock_unlock(&g_checkpoint_lock);
-    return result;
-}
+//     pthread_rwlock_unlock(&g_checkpoint_lock);
+//     return result;
+// }
 
 // --- Helper Functions and Unchanged Code from Phase 1 ---
 Table *get_table_by_id(int table_id)
@@ -469,6 +469,80 @@ static BPTree *create_tree()
     tree->node_count = 1;
     tree->record_count = 0;
     return tree;
+}
+
+// ============= B+ Tree Helper Functions =============
+
+static void free_node(BPTreeNode *node) {
+    if (!node) return;
+    if (!node->is_leaf) {
+        for (int i = 0; i <= node->num_keys; i++) {
+            free_node(node->children[i]);
+        }
+    }
+    free(node);
+}
+
+static BPTreeNode* split_leaf(BPTree *tree, BPTreeNode *leaf, int *up_key) {
+    BPTreeNode *new_leaf = create_node(true);
+    if (!new_leaf) return NULL;
+    
+    int mid = (BP_ORDER - 1) / 2;
+    *up_key = leaf->keys[mid];
+    
+    for (int i = mid; i < leaf->num_keys; i++) {
+        new_leaf->keys[i - mid] = leaf->keys[i];
+        new_leaf->data_ptrs[i - mid] = leaf->data_ptrs[i];
+        new_leaf->data_sizes[i - mid] = leaf->data_sizes[i];
+        leaf->keys[i] = 0;
+        leaf->data_ptrs[i] = NULL;
+        leaf->data_sizes[i] = 0;
+    }
+    
+    new_leaf->num_keys = leaf->num_keys - mid;
+    leaf->num_keys = mid;
+    new_leaf->next_leaf = leaf->next_leaf;
+    leaf->next_leaf = new_leaf;
+    tree->node_count++;
+    
+    return new_leaf;
+}
+
+static BPTreeNode* split_internal(BPTree *tree, BPTreeNode *node, int *up_key) {
+    BPTreeNode *new_node = create_node(false);
+    if (!new_node) return NULL;
+    
+    int mid = (BP_ORDER - 1) / 2;
+    *up_key = node->keys[mid];
+    
+    for (int i = mid + 1; i < node->num_keys; i++) {
+        new_node->keys[i - (mid + 1)] = node->keys[i];
+        node->keys[i] = 0;
+    }
+    
+    for (int i = mid + 1; i <= node->num_keys; i++) {
+        new_node->children[i - (mid + 1)] = node->children[i];
+        node->children[i] = NULL;
+    }
+    
+    new_node->num_keys = node->num_keys - (mid + 1);
+    node->num_keys = mid;
+    tree->node_count++;
+    
+    return new_node;
+}
+
+static bool insert_in_internal(BPTree *tree, BPTreeNode *node, int key, BPTreeNode *right_child) {
+    int i = node->num_keys - 1;
+    while (i >= 0 && node->keys[i] > key) {
+        node->keys[i + 1] = node->keys[i];
+        node->children[i + 2] = node->children[i + 1];
+        i--;
+    }
+    node->keys[i + 1] = key;
+    node->children[i + 2] = right_child;
+    node->num_keys++;
+    return true;
 }
 
 static void free_tree(BPTree *tree)
@@ -694,4 +768,312 @@ bool remove_recursive(BPTree *tree, BPTreeNode *node, int key, BPTreeNode *paren
         }
         return true;
     }
+}
+
+Table* get_table(const char *name) {
+    if (!is_initialized || !name) return NULL;
+    
+    for (int i = 0; i < MAX_TABLES; i++) {
+        if (tables[i] && strcmp(tables[i]->name, name) == 0) {
+            return tables[i];
+        }
+    }
+    return NULL;
+}
+
+Table* db_open_table(const char *name) {
+    return get_table(name);
+}
+
+void db_close_table(Table *table) {
+    if (table) {
+        table->is_open = false;
+        printf("Table '%s' closed\n", table->name);
+    }
+}
+
+void db_close_table(Table *table) {
+    if (table) {
+        table->is_open = false;
+        printf("Table '%s' closed\n", table->name);
+    }
+}
+
+int db_create_table(const char *name) {
+    if (!is_initialized) return -1;
+
+    int table_id = db_header->next_table_id;
+    if (table_id >= MAX_TABLES) {
+        printf("Error: Maximum number of tables reached\n");
+        return -1;
+    }
+
+    for (int i = 0; i < MAX_TABLES; i++) {
+        if (tables[i] && strcmp(tables[i]->name, name) == 0) {
+            printf("Error: Table '%s' already exists\n", name);
+            return -1;
+        }
+    }
+
+    Table *table = (Table *)malloc(sizeof(Table));
+    table->index = create_tree();
+    strncpy(table->name, name, 63);
+    table->name[63] = '\0';
+    table->table_id = table_id;
+    table->is_open = true;
+
+    void *wal_table_ptr = allocate_memory(sizeof(WALTable));
+    if (!wal_create_table(table->table_id, wal_table_ptr)) {
+        free_tree(table->index);
+        free(table);
+        return -1;
+    }
+    table->wal_table_offset = (char *)wal_table_ptr - (char *)nvram_map;
+
+    tables[table_id] = table;
+    db_header->next_table_id++;
+    flush_range(&db_header->next_table_id, sizeof(int));
+
+    printf("Table '%s' created with ID %d\n", name, table->table_id);
+    return table->table_id;
+}
+
+
+
+// B+ Tree Row Operations
+NVRAMPtr db_get_row(Table *table, int txn_id, int key, size_t *size) {
+    pthread_rwlock_rdlock(&g_checkpoint_lock);
+    
+    if (!table || !table->is_open) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return NULL;
+    }
+    
+    if (!lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) ||
+        !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_SHARED)) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return NULL;
+    }
+    
+    BPTreeNode *leaf = find_leaf(table->index, key);
+    if (!leaf) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return NULL;
+    }
+    
+    int pos = find_key_in_leaf(leaf, key);
+    if (pos == -1) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return NULL;
+    }
+    
+    if (size) *size = leaf->data_sizes[pos];
+    
+    pthread_rwlock_unlock(&g_checkpoint_lock);
+    return leaf->data_ptrs[pos];
+}
+
+bool db_put_row(Table *table, int txn_id, int key, void *data, size_t size) {
+    pthread_rwlock_rdlock(&g_checkpoint_lock);
+    
+    if (!table || !table->is_open) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    if (!lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) ||
+        !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE)) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    // Check if key already exists
+    BPTreeNode *existing_leaf = find_leaf(table->index, key);
+    if (existing_leaf && find_key_in_leaf(existing_leaf, key) != -1) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false; // Row already exists
+    }
+    
+    void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
+    NVRAMPtr nvram_data = allocate_memory(size);
+    
+    if (!wal_entry_ptr || !nvram_data) {
+        if (wal_entry_ptr) free_memory(wal_entry_ptr, sizeof(WALEntry));
+        if (nvram_data) free_memory(nvram_data, size);
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    memcpy(nvram_data, data, size);
+    flush_range(nvram_data, size);
+    
+    if (!wal_add_entry(table->table_id, key, nvram_data, WAL_INSERT, wal_entry_ptr, size)) {
+        free_memory(nvram_data, size);
+        free_memory(wal_entry_ptr, sizeof(WALEntry));
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    // Add to undo log
+    transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
+    
+    // Insert into B+ tree
+    int up_key;
+    BPTreeNode *new_node = NULL;
+    bool inserted = insert_recursive(table->index, table->index->root, key, nvram_data, size, &up_key, &new_node);
+    
+    if (!inserted) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    // Handle root split if necessary
+    if (new_node != NULL) {
+        BPTreeNode *new_root = create_node(false);
+        new_root->keys[0] = up_key;
+        new_root->children[0] = table->index->root;
+        new_root->children[1] = new_node;
+        new_root->num_keys = 1;
+        table->index->root = new_root;
+        table->index->height++;
+        table->index->node_count++;
+    }
+    
+    table->index->record_count++;
+    pthread_rwlock_unlock(&g_checkpoint_lock);
+    return true;
+}
+
+bool db_delete_row(Table *table, int txn_id, int key) {
+    pthread_rwlock_rdlock(&g_checkpoint_lock);
+    
+    if (!table || !table->is_open) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    if (!lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) ||
+        !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE)) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    BPTreeNode *leaf = find_leaf(table->index, key);
+    if (!leaf) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    int pos = find_key_in_leaf(leaf, key);
+    if (pos == -1) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false; // Not found
+    }
+    
+    size_t data_size = leaf->data_sizes[pos];
+    void *data_ptr = leaf->data_ptrs[pos];
+    
+    void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
+    if (!wal_entry_ptr) {
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    if (!wal_add_entry(table->table_id, key, data_ptr, WAL_DELETE, wal_entry_ptr, data_size)) {
+        free_memory(wal_entry_ptr, sizeof(WALEntry));
+        pthread_rwlock_unlock(&g_checkpoint_lock);
+        return false;
+    }
+    
+    // Add to undo log
+    transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
+    
+    bool result = remove_recursive(table->index, table->index->root, key, NULL, 0);
+    if (result) {
+        table->index->record_count--;
+    }
+    
+    pthread_rwlock_unlock(&g_checkpoint_lock);
+    return result;
+}
+
+int db_get_next_row(Table *table, int current_key) {
+    if (!table || !table->is_open) {
+        return -1;
+    }
+    
+    // Special case: if current_key is -1, return the first key
+    if (current_key == -1) {
+        BPTreeNode *node = table->index->root;
+        
+        // Navigate to leftmost leaf
+        while (!node->is_leaf) {
+            node = node->children[0];
+        }
+        
+        if (node->num_keys > 0) {
+            return node->keys[0];
+        } else {
+            return -1; // Empty tree
+        }
+    }
+    
+    // Find the leaf containing current_key or where it would be
+    BPTreeNode *leaf = find_leaf(table->index, current_key);
+    if (!leaf) return -1;
+    
+    // Find position where current_key is or would be
+    int i = 0;
+    while (i < leaf->num_keys && leaf->keys[i] <= current_key) {
+        i++;
+    }
+    
+    // If we found a next key in the same leaf
+    if (i < leaf->num_keys) {
+        return leaf->keys[i];
+    }
+    
+    // Otherwise, move to next leaf
+    if (leaf->next_leaf && leaf->next_leaf->num_keys > 0) {
+        return leaf->next_leaf->keys[0];
+    }
+    
+    return -1; // No more keys
+}
+
+NVRAMPtr* db_get_table_all_rows(Table *table) {
+    if (!table || !table->is_open || !table->index || !table->index->root) {
+        return NULL;
+    }
+    
+    // Get total number of records from the B+ tree
+    int total_records = table->index->record_count;
+    if (total_records == 0) {
+        return NULL;
+    }
+    
+    // Allocate array for all row pointers
+    NVRAMPtr *row_pointers = (NVRAMPtr *)malloc(total_records * sizeof(NVRAMPtr));
+    if (!row_pointers) {
+        return NULL;
+    }
+    
+    // Navigate to the leftmost leaf
+    BPTreeNode *node = table->index->root;
+    while (!node->is_leaf) {
+        node = node->children[0];
+    }
+    
+    // Traverse all leaf nodes and collect data pointers
+    int index = 0;
+    while (node != NULL && index < total_records) {
+        // Collect all data pointers from this leaf node
+        for (int i = 0; i < node->num_keys && index < total_records; i++) {
+            row_pointers[index++] = node->data_ptrs[i];
+        }
+        // Move to the next leaf node
+        node = node->next_leaf;
+    }
+    
+    return row_pointers;
 }

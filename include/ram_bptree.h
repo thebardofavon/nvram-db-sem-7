@@ -61,6 +61,7 @@ Table* db_open_table(const char *name);
 void db_close_table(Table *table);
 Table* get_table(const char *name);
 Table* get_table_by_id(int table_id); // New helper
+NVRAMPtr* db_get_table_all_rows(Table *table);
 
 // --- Row operations ---
 NVRAMPtr db_get_row(Table *table, int txn_id, int key, size_t *size);
