@@ -70,7 +70,47 @@ int wal_create_table(int table_id, void *memory_ptr)
     return 1;
 }
 
-int wal_add_entry(int table_id, int key, void *data_ptr, int op, void *entry_ptr, size_t data_size)
+
+void* wal_add_entry(int table_id, int key, void *data_ptr, WALOperation op, void *entry_ptr, size_t data_size)
+{
+    if (table_id < 0 || table_id >= MAX_TABLES || wal_tables[table_id] == NULL)
+    {
+        printf("Error: WAL Table %d not found.\n", table_id);
+        return NULL; // Return NULL on failure
+    }
+
+    WALTable *table = wal_tables[table_id];
+    pthread_mutex_lock(&table->mutex);
+
+    WALEntry *entry = (WALEntry *)entry_ptr;
+    entry->key = key;
+    entry->data_ptr = data_ptr;
+    entry->op_flag = op;
+    entry->data_size = data_size;
+    entry->next = NULL;
+    flush_range(entry, sizeof(WALEntry));
+
+    if (table->entry_tail == NULL)
+    {
+        table->entry_head = entry;
+        table->entry_tail = entry;
+        flush_range(&table->entry_head, sizeof(void *) * 2);
+    }
+    else
+    {
+        WALEntry *old_tail = table->entry_tail;
+        old_tail->next = entry;
+        flush_range(&old_tail->next, sizeof(void *));
+        table->entry_tail = entry;
+        flush_range(&table->entry_tail, sizeof(void *));
+    }
+
+    pthread_mutex_unlock(&table->mutex);
+    return entry; // Return the pointer to the new entry on success
+}
+
+
+// int wal_add_entry(int table_id, int key, void *data_ptr, int op, void *entry_ptr, size_t data_size)
 {
     if (table_id < 0 || table_id >= MAX_TABLES || wal_tables[table_id] == NULL)
     {
@@ -113,8 +153,26 @@ int wal_add_entry(int table_id, int key, void *data_ptr, int op, void *entry_ptr
     return 1;
 }
 
+// void wal_advance_commit_ptr(int table_id, int txn_id)
+// {
+//     if (table_id < 0 || table_id >= MAX_TABLES || wal_tables[table_id] == NULL)
+//     {
+//         return;
+//     }
+
+//     WALTable *table = wal_tables[table_id];
+//     pthread_mutex_lock(&table->mutex);
+
+//     // Atomically update commit pointer to current tail (last entry)
+//     atomic_write_64(&table->commit_ptr, (uint64_t)table->entry_tail);
+
+//     pthread_mutex_unlock(&table->mutex);
+// }
+
+// In src/wal.c
 void wal_advance_commit_ptr(int table_id, int txn_id)
 {
+    (void)txn_id; // Tell compiler we know this is unused for now
     if (table_id < 0 || table_id >= MAX_TABLES || wal_tables[table_id] == NULL)
     {
         return;
@@ -122,10 +180,7 @@ void wal_advance_commit_ptr(int table_id, int txn_id)
 
     WALTable *table = wal_tables[table_id];
     pthread_mutex_lock(&table->mutex);
-
-    // Atomically update commit pointer to current tail (last entry)
     atomic_write_64(&table->commit_ptr, (uint64_t)table->entry_tail);
-
     pthread_mutex_unlock(&table->mutex);
 }
 

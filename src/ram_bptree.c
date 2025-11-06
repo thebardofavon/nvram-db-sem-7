@@ -3,15 +3,13 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <fcntl.h> 
 #include "../include/free_space.h"
 #include "../include/ram_bptree.h"
 #include "../include/wal.h"
 #include "../include/lock_manager.h"
 
 // --- Global State ---
-#define MAX_TABLES 10
-#define MAX_TABLE_NAME 64
-
 static Table *tables[MAX_TABLES] = {NULL};
 static bool is_initialized = false;
 extern void *nvram_map;
@@ -20,30 +18,30 @@ LockManager g_lock_manager;
 static pthread_rwlock_t g_checkpoint_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 // --- B+ Tree Structures (RAM-only) ---
-struct BPTreeNode
-{
-    bool is_leaf;
-    int num_keys;
-    int keys[BP_ORDER - 1];
-    union
-    {
-        BPTreeNode *children[BP_ORDER];
-        struct
-        {
-            NVRAMPtr data_ptrs[BP_ORDER - 1];
-            size_t data_sizes[BP_ORDER - 1];
-        };
-    };
-    BPTreeNode *next_leaf;
-};
+// struct BPTreeNode
+// {
+//     bool is_leaf;
+//     int num_keys;
+//     int keys[BP_ORDER - 1];
+//     union
+//     {
+//         BPTreeNode *children[BP_ORDER];
+//         struct
+//         {
+//             NVRAMPtr data_ptrs[BP_ORDER - 1];
+//             size_t data_sizes[BP_ORDER - 1];
+//         };
+//     };
+//     BPTreeNode *next_leaf;
+// };
 
-struct BPTree
-{
-    BPTreeNode *root;
-    int height;
-    int node_count;
-    int record_count;
-};
+// struct BPTree
+// {
+//     BPTreeNode *root;
+//     int height;
+//     int node_count;
+//     int record_count;
+// };
 
 // --- Function Prototypes from Phase 1 ---
 // Note: These are large and unchanged. For brevity, their code is not repeated.
@@ -60,22 +58,43 @@ bool insert_recursive(BPTree *tree, BPTreeNode *node, int key, void *data, size_
 
 // --- FULLY IMPLEMENTED B+ TREE DELETION ---
 // [This section contains new/updated code for Phase 2]
-static bool merge_nodes(BPTree *tree, BPTreeNode *left, BPTreeNode *right, int parent_key_idx, BPTreeNode *parent);
-static bool borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx);
-static bool borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx);
+// static bool merge_nodes(BPTree *tree, BPTreeNode *left, BPTreeNode *right, int parent_key_idx, BPTreeNode *parent);
+// static bool borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx);
+// static bool borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx);
+// bool remove_recursive(BPTree *tree, BPTreeNode *node, int key, BPTreeNode *parent, int parent_idx);
+
+// FIXED: Prototypes now match the void implementation
+static void merge_leaf_nodes(BPTree *tree, BPTreeNode *left_node, BPTreeNode *right_node, BPTreeNode *parent, int parent_key_idx);
+static void borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx);
+static void borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx);
 bool remove_recursive(BPTree *tree, BPTreeNode *node, int key, BPTreeNode *parent, int parent_idx);
 
 // --- Core DB Lifecycle Functions ---
 void db_startup()
 {
-    nvram_map = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, open(FILEPATH, O_RDWR), 0);
+    // FIXED: Correct use of open()
+    int fd = open(FILEPATH, O_RDWR | O_CREAT, 0666);
+    if (fd == -1) {
+        perror("open device file");
+        exit(1);
+    }
+    if (ftruncate(fd, FILESIZE) == -1) {
+        perror("ftruncate");
+        close(fd);
+        exit(1);
+    }
+
+    nvram_map = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd); 
+
     if (nvram_map == MAP_FAILED)
     {
         perror("mmap on startup");
         exit(1);
     }
     db_header = (DatabaseHeader *)nvram_map;
-    bool first_run = ((uint64_t)db_header == 0);
+    
+    bool first_run = (db_header->magic_number == 0);
 
     if (first_run)
     {
@@ -94,6 +113,35 @@ void db_startup()
     flush_range(db_header, sizeof(uint64_t));
     printf("System is now live. Shutdown flag set to DIRTY.\n");
 }
+
+// void db_startup()
+// {
+//     nvram_map = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, open(FILEPATH, O_RDWR), 0);
+//     if (nvram_map == MAP_FAILED)
+//     {
+//         perror("mmap on startup");
+//         exit(1);
+//     }
+//     db_header = (DatabaseHeader *)nvram_map;
+//     bool first_run = ((uint64_t)db_header == 0);
+
+//     if (first_run)
+//     {
+//         db_first_time_init();
+//     }
+//     else if (db_header->magic_number == CLEAN_SHUTDOWN_MAGIC)
+//     {
+//         db_reload_state();
+//     }
+//     else
+//     {
+//         db_recover_from_wal();
+//     }
+
+//     db_header->magic_number = DIRTY_SHUTDOWN_MAGIC;
+//     flush_range(db_header, sizeof(uint64_t));
+//     printf("System is now live. Shutdown flag set to DIRTY.\n");
+// }
 
 static void persist_state()
 {
@@ -545,6 +593,138 @@ static bool insert_in_internal(BPTree *tree, BPTreeNode *node, int key, BPTreeNo
     return true;
 }
 
+bool insert_recursive(BPTree *tree, BPTreeNode *node, int key, void *data, size_t size, int *up_key, BPTreeNode **new_node) {
+    if (node->is_leaf) {
+        // --- LEAF NODE CASE ---
+        if (node->num_keys < BP_ORDER - 1) {
+            // Leaf has space, insert here
+            int i = 0;
+            while (i < node->num_keys && node->keys[i] < key) {
+                i++;
+            }
+            // Shift elements to the right
+            for (int j = node->num_keys; j > i; j--) {
+                node->keys[j] = node->keys[j - 1];
+                node->data_ptrs[j] = node->data_ptrs[j - 1];
+                node->data_sizes[j] = node->data_sizes[j - 1];
+            }
+            // Insert new key-value pair
+            node->keys[i] = key;
+            node->data_ptrs[i] = data;
+            node->data_sizes[i] = size;
+            node->num_keys++;
+            *new_node = NULL; // No split occurred
+            return true;
+        } else {
+            // Leaf is full, must split
+            *new_node = create_node(true);
+            
+            // Create a temporary holding space for all keys + the new one
+            int temp_keys[BP_ORDER];
+            void* temp_ptrs[BP_ORDER];
+            size_t temp_sizes[BP_ORDER];
+            
+            int i = 0;
+            while (i < node->num_keys && node->keys[i] < key) {
+                i++;
+            }
+            
+            // Copy keys before the new key
+            memcpy(temp_keys, node->keys, i * sizeof(int));
+            memcpy(temp_ptrs, node->data_ptrs, i * sizeof(void*));
+            memcpy(temp_sizes, node->data_sizes, i * sizeof(size_t));
+            
+            // Insert the new key
+            temp_keys[i] = key;
+            temp_ptrs[i] = data;
+            temp_sizes[i] = size;
+            
+            // Copy keys after the new key
+            memcpy(temp_keys + i + 1, node->keys + i, (node->num_keys - i) * sizeof(int));
+            memcpy(temp_ptrs + i + 1, node->data_ptrs + i, (node->num_keys - i) * sizeof(void*));
+            memcpy(temp_sizes + i + 1, node->data_sizes + i, (node->num_keys - i) * sizeof(size_t));
+
+            int mid_point = (BP_ORDER) / 2;
+            
+            // Distribute keys between old and new leaf
+            node->num_keys = mid_point;
+            (*new_node)->num_keys = BP_ORDER - mid_point;
+            
+            memcpy(node->keys, temp_keys, node->num_keys * sizeof(int));
+            memcpy(node->data_ptrs, temp_ptrs, node->num_keys * sizeof(void*));
+            memcpy(node->data_sizes, temp_sizes, node->num_keys * sizeof(size_t));
+            
+            memcpy((*new_node)->keys, temp_keys + mid_point, (*new_node)->num_keys * sizeof(int));
+            memcpy((*new_node)->data_ptrs, temp_ptrs + mid_point, (*new_node)->num_keys * sizeof(void*));
+            memcpy((*new_node)->data_sizes, temp_sizes + mid_point, (*new_node)->num_keys * sizeof(size_t));
+
+            // The key to be pushed up is the first key of the new node
+            *up_key = (*new_node)->keys[0];
+            
+            // Update linked list of leaves
+            (*new_node)->next_leaf = node->next_leaf;
+            node->next_leaf = *new_node;
+            
+            return true;
+        }
+    } else {
+        // --- INTERNAL NODE CASE ---
+        int i = 0;
+        while (i < node->num_keys && key >= node->keys[i]) {
+            i++;
+        }
+        
+        int child_up_key;
+        BPTreeNode *child_new_node = NULL;
+        if (!insert_recursive(tree, node->children[i], key, data, size, &child_up_key, &child_new_node)) {
+            return false;
+        }
+
+        // If a child was split, we need to insert the new key/child into this node
+        if (child_new_node) {
+            if (node->num_keys < BP_ORDER - 1) {
+                // This node has space
+                for (int j = node->num_keys; j > i; j--) {
+                    node->keys[j] = node->keys[j-1];
+                    node->children[j+1] = node->children[j];
+                }
+                node->keys[i] = child_up_key;
+                node->children[i+1] = child_new_node;
+                node->num_keys++;
+                *new_node = NULL; // This node did not split
+            } else {
+                // This node is full too, must split
+                *new_node = create_node(false);
+                
+                int temp_keys[BP_ORDER];
+                BPTreeNode* temp_children[BP_ORDER + 1];
+
+                memcpy(temp_keys, node->keys, i * sizeof(int));
+                memcpy(temp_children, node->children, (i + 1) * sizeof(BPTreeNode*));
+
+                temp_keys[i] = child_up_key;
+                temp_children[i+1] = child_new_node;
+
+                memcpy(temp_keys + i + 1, node->keys + i, (node->num_keys - i) * sizeof(int));
+                memcpy(temp_children + i + 2, node->children + i + 1, (node->num_keys - i) * sizeof(BPTreeNode*));
+                
+                int mid_point = (BP_ORDER - 1) / 2;
+                *up_key = temp_keys[mid_point];
+
+                node->num_keys = mid_point;
+                (*new_node)->num_keys = (BP_ORDER - 1) - mid_point;
+
+                memcpy(node->keys, temp_keys, node->num_keys * sizeof(int));
+                memcpy(node->children, temp_children, (node->num_keys + 1) * sizeof(BPTreeNode*));
+
+                memcpy((*new_node)->keys, temp_keys + mid_point + 1, (*new_node)->num_keys * sizeof(int));
+                memcpy((*new_node)->children, temp_children + mid_point + 1, ((*new_node)->num_keys + 1) * sizeof(BPTreeNode*));
+            }
+        }
+        return true;
+    }
+}
+
 static void free_tree(BPTree *tree)
 {
     if (tree)
@@ -631,7 +811,7 @@ void db_recover_from_wal()
 }
 
 
-static void borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx) {
+void borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx) {
     // 1. Make space in the current node by shifting all keys to the right
     for (int i = node->num_keys; i > 0; i--) {
         node->keys[i] = node->keys[i - 1];
@@ -652,7 +832,7 @@ static void borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BP
     parent->keys[left_sibling_idx] = node->keys[0];
 }
 
-static void borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx) {
+void borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx) {
     // 1. Copy the smallest key from the right sibling to the end of the current node
     node->keys[node->num_keys] = right_sibling->keys[0];
     node->data_ptrs[node->num_keys] = right_sibling->data_ptrs[0];
@@ -792,12 +972,6 @@ void db_close_table(Table *table) {
     }
 }
 
-void db_close_table(Table *table) {
-    if (table) {
-        table->is_open = false;
-        printf("Table '%s' closed\n", table->name);
-    }
-}
 
 int db_create_table(const char *name) {
     if (!is_initialized) return -1;
