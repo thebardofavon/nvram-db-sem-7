@@ -111,47 +111,47 @@ void* wal_add_entry(int table_id, int key, void *data_ptr, WALOperation op, void
 
 
 // int wal_add_entry(int table_id, int key, void *data_ptr, int op, void *entry_ptr, size_t data_size)
-{
-    if (table_id < 0 || table_id >= MAX_TABLES || wal_tables[table_id] == NULL)
-    {
-        printf("Error: WAL Table %d not found.\n", table_id);
-        return 0;
-    }
+// {
+//     if (table_id < 0 || table_id >= MAX_TABLES || wal_tables[table_id] == NULL)
+//     {
+//         printf("Error: WAL Table %d not found.\n", table_id);
+//         return 0;
+//     }
 
-    WALTable *table = wal_tables[table_id];
-    pthread_mutex_lock(&table->mutex);
+//     WALTable *table = wal_tables[table_id];
+//     pthread_mutex_lock(&table->mutex);
 
-    // Create WAL entry in allocated NVRAM space
-    WALEntry *entry = (WALEntry *)entry_ptr;
-    entry->key = key;
-    entry->data_ptr = data_ptr;
-    entry->op_flag = op;
-    entry->data_size = data_size;
-    entry->next = NULL;
+//     // Create WAL entry in allocated NVRAM space
+//     WALEntry *entry = (WALEntry *)entry_ptr;
+//     entry->key = key;
+//     entry->data_ptr = data_ptr;
+//     entry->op_flag = op;
+//     entry->data_size = data_size;
+//     entry->next = NULL;
 
-    // First, persist the entry content itself
-    flush_range(entry, sizeof(WALEntry));
+//     // First, persist the entry content itself
+//     flush_range(entry, sizeof(WALEntry));
 
-    // Add to the end of the linked list
-    if (table->entry_tail == NULL)
-    {
-        table->entry_head = entry;
-        table->entry_tail = entry;
-        flush_range(&table->entry_head, sizeof(void *) * 2); // Persist head and tail
-    }
-    else
-    {
-        WALEntry *old_tail = table->entry_tail;
-        old_tail->next = entry;
-        flush_range(&old_tail->next, sizeof(void *)); // Persist the next pointer of the old tail
+//     // Add to the end of the linked list
+//     if (table->entry_tail == NULL)
+//     {
+//         table->entry_head = entry;
+//         table->entry_tail = entry;
+//         flush_range(&table->entry_head, sizeof(void *) * 2); // Persist head and tail
+//     }
+//     else
+//     {
+//         WALEntry *old_tail = table->entry_tail;
+//         old_tail->next = entry;
+//         flush_range(&old_tail->next, sizeof(void *)); // Persist the next pointer of the old tail
 
-        table->entry_tail = entry;
-        flush_range(&table->entry_tail, sizeof(void *)); // Then update and persist the tail
-    }
+//         table->entry_tail = entry;
+//         flush_range(&table->entry_tail, sizeof(void *)); // Then update and persist the tail
+//     }
 
-    pthread_mutex_unlock(&table->mutex);
-    return 1;
-}
+//     pthread_mutex_unlock(&table->mutex);
+//     return 1;
+// }
 
 // void wal_advance_commit_ptr(int table_id, int txn_id)
 // {
@@ -168,6 +168,8 @@ void* wal_add_entry(int table_id, int key, void *data_ptr, WALOperation op, void
 
 //     pthread_mutex_unlock(&table->mutex);
 // }
+
+
 
 // In src/wal.c
 void wal_advance_commit_ptr(int table_id, int txn_id)

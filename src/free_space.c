@@ -34,7 +34,7 @@ typedef struct PersistedFreeBlock
 FreeBlock *freeList = NULL;
 
 // In-RAM pointer to the master database header in NVRAM
-DatabaseHeader *db_header = NULL;
+// DatabaseHeader *db_header = NULL; // Defined in ram_bptree.c
 
 // Helper to get the total number of blocks in the free list
 static int count_free_blocks()

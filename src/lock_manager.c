@@ -79,7 +79,7 @@ static bool is_cyclic_util(LockManager *lm, int u, bool *visited, bool *recursio
         recursion_stack[u] = true;
 
         for (int v = 0; v < MAX_CONCURRENT_TRANSACTIONS; v++) {
-            if (lm->waits_for[u * MAX_CONCURRENT_TRANSACTIONS + v]) { // u waits for v
+            if (lm->waits_for[u][v]) { // u waits for v
                 if (!visited[v] && is_cyclic_util(lm, v, visited, recursion_stack)) {
                     return true;
                 } else if (recursion_stack[v]) {
@@ -151,7 +151,7 @@ bool lock_acquire(LockManager *lm, int txn_id, int resource_id, bool is_table, L
         if (entry->exclusive_owner != -1) {
             int holder_idx = get_txn_idx(entry->exclusive_owner);
             if (waiter_idx != -1 && holder_idx != -1) {
-                lm->waits_for[waiter_idx * MAX_CONCURRENT_TRANSACTIONS + holder_idx] = true;
+                lm->waits_for[waiter_idx][holder_idx] = true;
             }
         } else { // Waiting on shared locks
             // Simplified: wait on all shared holders
@@ -165,7 +165,7 @@ bool lock_acquire(LockManager *lm, int txn_id, int resource_id, bool is_table, L
             if (entry->exclusive_owner != -1) {
                 int holder_idx = get_txn_idx(entry->exclusive_owner);
                 if (waiter_idx != -1 && holder_idx != -1) {
-                    lm->waits_for[waiter_idx * MAX_CONCURRENT_TRANSACTIONS + holder_idx] = false;
+                    lm->waits_for[waiter_idx][holder_idx] = false;
                 }
             }
             pthread_mutex_unlock(&lm->mutex);
@@ -180,7 +180,7 @@ bool lock_acquire(LockManager *lm, int txn_id, int resource_id, bool is_table, L
         if (entry->exclusive_owner != -1) {
             int holder_idx = get_txn_idx(entry->exclusive_owner);
             if (waiter_idx != -1 && holder_idx != -1) {
-                lm->waits_for[waiter_idx * MAX_CONCURRENT_TRANSACTIONS + holder_idx] = false;
+                lm->waits_for[waiter_idx][holder_idx] = false;
             }
         }
     }
@@ -249,7 +249,7 @@ bool transaction_abort(LockManager *lm, int txn_id, bool perform_undo) {
     pthread_mutex_unlock(&lm->mutex);
     return true;
 }
-bool transaction_add_undo_action(LockManager lm, int txn_id, int table_id, void wal_entry_ptr) {
+bool transaction_add_undo_action(LockManager *lm, int txn_id, int table_id, void *wal_entry_ptr) {
     pthread_mutex_lock(&lm->mutex);
     Transaction *txn = find_transaction(lm, txn_id);
     if (!txn) {
