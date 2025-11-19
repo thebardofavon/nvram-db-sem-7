@@ -221,6 +221,7 @@ void *handle_client(void *arg)
 }
 // NEW: Background thread for periodic checkpointing
 void *checkpoint_thread_func(void *arg) {
+    (void)arg;
     while (1) {
         sleep(CHECKPOINT_INTERVAL_S);
         db_checkpoint();

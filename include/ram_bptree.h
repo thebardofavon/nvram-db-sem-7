@@ -1,5 +1,3 @@
-// REPLACE THE ENTIRE CONTENTS of include/ram_bptree.h with this.
-// This version includes the full struct definitions.
 #ifndef RAM_BPTREE_H
 #define RAM_BPTREE_H
 
@@ -19,8 +17,6 @@ typedef void* NVRAMPtr;
 // Global lock manager
 extern LockManager g_lock_manager;
 
-// --- B+ Tree Structures (RAM-only) ---
-// FIXED: Moved definitions from .c file to .h file
 typedef struct BPTreeNode
 {
     bool is_leaf;

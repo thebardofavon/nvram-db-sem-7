@@ -17,35 +17,6 @@ DatabaseHeader *db_header = NULL;
 LockManager g_lock_manager;
 static pthread_rwlock_t g_checkpoint_lock = PTHREAD_RWLOCK_INITIALIZER;
 
-// --- B+ Tree Structures (RAM-only) ---
-// struct BPTreeNode
-// {
-//     bool is_leaf;
-//     int num_keys;
-//     int keys[BP_ORDER - 1];
-//     union
-//     {
-//         BPTreeNode *children[BP_ORDER];
-//         struct
-//         {
-//             NVRAMPtr data_ptrs[BP_ORDER - 1];
-//             size_t data_sizes[BP_ORDER - 1];
-//         };
-//     };
-//     BPTreeNode *next_leaf;
-// };
-
-// struct BPTree
-// {
-//     BPTreeNode *root;
-//     int height;
-//     int node_count;
-//     int record_count;
-// };
-
-// --- Function Prototypes from Phase 1 ---
-// Note: These are large and unchanged. For brevity, their code is not repeated.
-// Please ensure you have the implementations from the Phase 1 ram_bptree.c.
 void db_first_time_init();
 void db_reload_state();
 void db_recover_from_wal();
@@ -56,14 +27,6 @@ BPTreeNode *find_leaf(BPTree *tree, int key);
 int find_key_in_leaf(BPTreeNode *leaf, int key);
 bool insert_recursive(BPTree *tree, BPTreeNode *node, int key, void *data, size_t size, int *up_key, BPTreeNode **new_node);
 
-// --- FULLY IMPLEMENTED B+ TREE DELETION ---
-// [This section contains new/updated code for Phase 2]
-// static bool merge_nodes(BPTree *tree, BPTreeNode *left, BPTreeNode *right, int parent_key_idx, BPTreeNode *parent);
-// static bool borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx);
-// static bool borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx);
-// bool remove_recursive(BPTree *tree, BPTreeNode *node, int key, BPTreeNode *parent, int parent_idx);
-
-// FIXED: Prototypes now match the void implementation
 static void merge_leaf_nodes(BPTree *tree, BPTreeNode *left_node, BPTreeNode *right_node, BPTreeNode *parent, int parent_key_idx);
 static void borrow_from_left_leaf(BPTreeNode *node, BPTreeNode *left_sibling, BPTreeNode *parent, int left_sibling_idx);
 static void borrow_from_right_leaf(BPTreeNode *node, BPTreeNode *right_sibling, BPTreeNode *parent, int node_idx);
@@ -113,35 +76,6 @@ void db_startup()
     flush_range(db_header, sizeof(uint64_t));
     printf("System is now live. Shutdown flag set to DIRTY.\n");
 }
-
-// void db_startup()
-// {
-//     nvram_map = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, open(FILEPATH, O_RDWR), 0);
-//     if (nvram_map == MAP_FAILED)
-//     {
-//         perror("mmap on startup");
-//         exit(1);
-//     }
-//     db_header = (DatabaseHeader *)nvram_map;
-//     bool first_run = ((uint64_t)db_header == 0);
-
-//     if (first_run)
-//     {
-//         db_first_time_init();
-//     }
-//     else if (db_header->magic_number == CLEAN_SHUTDOWN_MAGIC)
-//     {
-//         db_reload_state();
-//     }
-//     else
-//     {
-//         db_recover_from_wal();
-//     }
-
-//     db_header->magic_number = DIRTY_SHUTDOWN_MAGIC;
-//     flush_range(db_header, sizeof(uint64_t));
-//     printf("System is now live. Shutdown flag set to DIRTY.\n");
-// }
 
 static void persist_state()
 {
@@ -309,108 +243,13 @@ bool db_abort_transaction(int txn_id)
     return transaction_abort(&g_lock_manager, txn_id, false);
 }
 
-// --- Row Operations (with Undo Logging) ---
-// bool db_put_row(Table *table, int txn_id, int key, void *data, size_t size)
-// {
-//     pthread_rwlock_rdlock(&g_checkpoint_lock); // Acquire read lock
-//     if (!table || !table->is_open || !lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) || !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE))
-//     {
-//         pthread_rwlock_unlock(&g_checkpoint_lock);
-//         return false;
-//     }
-//     // ... (rest of the function is the same, but add undo logging)
-//     void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
-//     NVRAMPtr nvram_data = allocate_memory(size);
-    
-//     if (!wal_entry_ptr || !nvram_data)
-//     {
-//         // Handle allocation failure
-//         if (wal_entry_ptr)
-//             free_memory(wal_entry_ptr, sizeof(WALEntry));
-//         if (nvram_data)
-//             free_memory(nvram_data, size);
-//         return false;
-//     }
 
-//     memcpy(nvram_data, data, size);
-//     flush_range(nvram_data, size);
-
-//     if (!wal_add_entry(table->table_id, key, nvram_data, WAL_INSERT, wal_entry_ptr, size))
-//     {
-//         free_memory(nvram_data, size);
-//         free_memory(wal_entry_ptr, sizeof(WALEntry));
-//         return false;
-//     }
-
-//     // NEW: Add to undo log
-//     transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
-
-//     // ... (rest of insert logic)
-//     bool result = false;
-//     int up_key;
-//     BPTreeNode *new_node = NULL;
-//     if (insert_recursive(table->index, table->index->root, key, nvram_data, size, &up_key, &new_node))
-//     {
-//         // ... (handle root split)
-//         result = true;
-//     }
-
-//     pthread_rwlock_unlock(&g_checkpoint_lock);
-//     return result;
-// }
-
-// bool db_delete_row(Table *table, int txn_id, int key)
-// {
-//     pthread_rwlock_rdlock(&g_checkpoint_lock);
-//     if (!table || !table->is_open || !lock_acquire(&g_lock_manager, txn_id, table->table_id, true, LOCK_SHARED) || !lock_acquire(&g_lock_manager, txn_id, key, false, LOCK_EXCLUSIVE))
-//     {
-//         pthread_rwlock_unlock(&g_checkpoint_lock);
-//         return false;
-//     }
-
-//     BPTreeNode *leaf = find_leaf(table->index, key);
-//     int pos = find_key_in_leaf(leaf, key);
-//     if (pos == -1)
-//         return false; // Not found
-    
-//     size_t data_size;
-//     void *data_ptr;
-
-
-//     void *wal_entry_ptr = allocate_memory(sizeof(WALEntry));
-//     if (!wal_entry_ptr)
-//         return false;
-
-//     // The data_ptr and data_size are the "before image" for the undo log
-//     if (!wal_add_entry(table->table_id, key, data_ptr, WAL_DELETE, wal_entry_ptr, data_size))
-//     {
-//         free_memory(wal_entry_ptr, sizeof(WALEntry));
-//         return false;
-//     }
-
-//     // NEW: Add to undo log
-//     transaction_add_undo_action(&g_lock_manager, txn_id, table->table_id, wal_entry_ptr);
-
-//     bool result = remove_recursive(table->index, table->index->root, key, NULL, 0);
-
-//     pthread_rwlock_unlock(&g_checkpoint_lock);
-//     return result;
-// }
-
-// --- Helper Functions and Unchanged Code from Phase 1 ---
 Table *get_table_by_id(int table_id)
 {
     if (table_id < 0 || table_id >= MAX_TABLES)
         return NULL;
     return tables[table_id];
 }
-
-// ... All other functions like get_table, create_table, get_row etc. are mostly unchanged ...
-// ... The full, correct implementation of B+Tree remove_recursive and its helpers follows ...
-// IMPORTANT: Replace your old remove_recursive and its helpers with this complete version.
-// [Paste the unchanged functions like db_first_time_init, db_reload_state, etc., here from Phase 1]
-// [Paste create_node, create_tree, insert_recursive, find_leaf, etc., here from Phase 1]
-// [Finally, paste the new full deletion logic]
 
 void db_first_time_init()
 {
