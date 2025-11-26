@@ -1,0 +1,6 @@
+CREATE TABLE test_persist
+USE TABLE test_persist
+BEGIN TRANSACTION
+INSERT ROW 10 'persistent_data'
+COMMIT
+EXIT

@@ -1,0 +1,7 @@
+CREATE TABLE test_abort
+USE TABLE test_abort
+BEGIN TRANSACTION
+INSERT ROW 1 'should_be_gone'
+ABORT
+GET ROW 1
+EXIT

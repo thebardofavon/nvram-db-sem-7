@@ -20,7 +20,7 @@ static pthread_rwlock_t g_checkpoint_lock = PTHREAD_RWLOCK_INITIALIZER;
 void db_first_time_init();
 void db_reload_state();
 void db_recover_from_wal();
-static BPTreeNode *create_node(bool is_leaf);
+BPTreeNode *create_node(bool is_leaf);
 static BPTree *create_tree();
 static void free_tree(BPTree *tree);
 BPTreeNode *find_leaf(BPTree *tree, int key);
@@ -161,7 +161,7 @@ void db_checkpoint()
     {
         if (wal_tables[i])
         {
-            db_header->wal_commit_offsets[i] = (size_t)((char *)wal_tables[i]->commit_ptr - (char *)nvram_map);
+            db_header->wal_commit_offsets[i] = wal_tables[i]->commit_offset;
         }
     }
     flush_range(db_header, sizeof(DatabaseHeader));
@@ -170,12 +170,14 @@ void db_checkpoint()
     // A real system would reuse the file space.
     for (int i = 0; i < MAX_TABLES; i++)
     {
-        if (wal_tables[i] && wal_tables[i]->commit_ptr)
+        if (wal_tables[i] && wal_tables[i]->commit_offset)
         {
-            // All entries before the commit_ptr are now covered by the snapshot.
+            // All entries before the commit_offset are now covered by the snapshot.
             // We can logically truncate by moving the head.
-            wal_tables[i]->entry_head = wal_tables[i]->commit_ptr->next;
-            flush_range(&wal_tables[i]->entry_head, sizeof(void *));
+            extern void *nvram_map;
+            WALEntry *commit_entry = (WALEntry *)((char *)nvram_map + wal_tables[i]->commit_offset);
+            wal_tables[i]->entry_head_offset = commit_entry->next_offset;
+            flush_range(&wal_tables[i]->entry_head_offset, sizeof(size_t));
         }
     }
 
@@ -231,9 +233,24 @@ bool db_abort_transaction(int txn_id)
                 printf("UNDO: Inserting key %d into table %s\n", wal_entry->key, table->name);
                 int up_key;
                 BPTreeNode *new_node = NULL;
-                insert_recursive(table->index, table->index->root, wal_entry->key,
-                                 wal_entry->data_ptr, wal_entry->data_size, &up_key, &new_node);
-                // Note: Not handling root splits in undo for simplicity.
+                void *data_ptr = (char *)nvram_map + wal_entry->data_offset;
+                bool inserted = insert_recursive(table->index, table->index->root, wal_entry->key,
+                                 data_ptr, wal_entry->data_size, &up_key, &new_node);
+                
+                if (inserted) {
+                    // Handle root split if necessary
+                    if (new_node != NULL) {
+                        BPTreeNode *new_root = create_node(false);
+                        new_root->keys[0] = up_key;
+                        new_root->children[0] = table->index->root;
+                        new_root->children[1] = new_node;
+                        new_root->num_keys = 1;
+                        table->index->root = new_root;
+                        table->index->height++;
+                        table->index->node_count++;
+                    }
+                    table->index->record_count++;
+                }
             }
         }
         current_undo = current_undo->next;
@@ -293,11 +310,12 @@ void db_reload_state()
 
     // 2. Reload table metadata and reconstruct B+Trees
     PersistedTable *p_catalog = (PersistedTable *)((char *)nvram_map + db_header->table_catalog_offset);
-    for (int i = 0; i < db_header->num_tables; ++i)
+    // Must check ALL slots, not just num_tables, because tables are indexed by table_id
+    for (int i = 0; i < MAX_TABLES; ++i)
     {
         // This simplified version reloads metadata but relies on WAL for index state
         PersistedTable *p_table = &p_catalog[i];
-        if (p_table->name[0] == '\0')
+        if (p_table->name[0] == '\0' || p_table->name[0] == -1)
             continue; // Skip empty slots
 
         Table *table = (Table *)malloc(sizeof(Table));
@@ -312,6 +330,7 @@ void db_reload_state()
 
         // After reloading metadata, we MUST replay the WAL to reconstruct the index
         wal_replay_log_for_table(table);
+        printf("Reloaded table '%s' (ID: %d)\n", table->name, table->table_id);
     }
 
     lock_manager_init(&g_lock_manager);
@@ -319,7 +338,7 @@ void db_reload_state()
     printf("Database state reloaded.\n");
 }
 
-static BPTreeNode *create_node(bool is_leaf)
+BPTreeNode *create_node(bool is_leaf)
 {
     BPTreeNode *node = (BPTreeNode *)malloc(sizeof(BPTreeNode));
     if (!node)

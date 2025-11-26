@@ -34,7 +34,7 @@ clean:
 
 # Run the server with sudo
 server: $(SERVER_TARGET)
-	sudo ./$(SERVER_TARGET)
+	./$(SERVER_TARGET)
 
 # Run the client
 client: $(CLIENT_TARGET)

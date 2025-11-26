@@ -5,8 +5,8 @@
 #include <pthread.h>
 #include "ram_bptree.h" // For Table struct definition
 
-#define FILEPATH "/dev/dax0.0"
-#define FILESIZE (2L * 1024 * 1024 * 1024) // 2GB
+#define FILEPATH "nvram_disk"
+#define FILESIZE (100L * 1024 * 1024) // 100MB for simulation
 
 extern pthread_mutex_t free_space_mutex;
 

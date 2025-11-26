@@ -213,22 +213,25 @@ void rebuild_free_list_after_recovery(Table *tables[], int num_tables)
 
         // Traverse the WAL for this table
         WALTable *wal_table = (WALTable *)((char *)nvram_map + table->wal_table_offset);
-        WALEntry *current_entry = wal_table->entry_head;
+        WALEntry *current_entry = (WALEntry *)((char *)nvram_map + wal_table->entry_head_offset);
         while (current_entry)
         {
             // Account for the WALEntry structure
-            used_blocks[count++] = (UsedBlock){(size_t)((char *)current_entry - (char *)nvram_map), sizeof(WALEntry)};
+            size_t current_offset = (size_t)((char *)current_entry - (char *)nvram_map);
+            used_blocks[count++] = (UsedBlock){current_offset, sizeof(WALEntry)};
             // Account for the row data pointed to by the entry
-            if (current_entry->data_ptr)
+            if (current_entry->data_offset)
             {
-                used_blocks[count++] = (UsedBlock){(size_t)((char *)current_entry->data_ptr - (char *)nvram_map), current_entry->data_size};
+                used_blocks[count++] = (UsedBlock){current_entry->data_offset, current_entry->data_size};
             }
             if (count >= capacity)
             {
                 capacity *= 2;
                 used_blocks = realloc(used_blocks, capacity * sizeof(UsedBlock));
             }
-            current_entry = current_entry->next;
+            if (current_entry->next_offset == 0)
+                break;
+            current_entry = (WALEntry *)((char *)nvram_map + current_entry->next_offset);
         }
     }
 

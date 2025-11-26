@@ -16,6 +16,11 @@ extern int find_key_in_leaf(BPTreeNode *leaf, int key);
 extern bool insert_recursive(BPTree *tree, BPTreeNode *node, int key, void *data, size_t size, int *up_key, BPTreeNode **new_node);
 extern bool remove_recursive(BPTree *tree, BPTreeNode *node, int key, BPTreeNode *parent, int parent_idx);
 extern BPTreeNode *create_node(bool is_leaf); // Need to access this for recovery
+extern void *nvram_map; // Access to the NVRAM base address
+
+// Helper macros to convert between pointers and offsets
+#define PTR_TO_OFFSET(ptr) ((ptr) ? (size_t)((char*)(ptr) - (char*)nvram_map) : 0)
+#define OFFSET_TO_PTR(offset, type) ((offset) ? (type*)((char*)nvram_map + (offset)) : NULL)
 
 // NVRAM persistence functions
 void flush_range(void *start, size_t size)
@@ -56,9 +61,9 @@ int wal_create_table(int table_id, void *memory_ptr)
     // Initialize the WAL table in allocated NVRAM space
     WALTable *new_table = (WALTable *)memory_ptr;
     new_table->table_id = table_id;
-    new_table->entry_head = NULL;
-    new_table->entry_tail = NULL;
-    new_table->commit_ptr = NULL;
+    new_table->entry_head_offset = 0; // 0 means NULL
+    new_table->entry_tail_offset = 0;
+    new_table->commit_offset = 0;
 
     // Initialize mutex
     pthread_mutex_init(&new_table->mutex, NULL);
@@ -84,25 +89,27 @@ void* wal_add_entry(int table_id, int key, void *data_ptr, WALOperation op, void
 
     WALEntry *entry = (WALEntry *)entry_ptr;
     entry->key = key;
-    entry->data_ptr = data_ptr;
+    entry->data_offset = PTR_TO_OFFSET(data_ptr);
     entry->op_flag = op;
     entry->data_size = data_size;
-    entry->next = NULL;
+    entry->next_offset = 0; // NULL
     flush_range(entry, sizeof(WALEntry));
 
-    if (table->entry_tail == NULL)
+    size_t entry_offset = PTR_TO_OFFSET(entry);
+
+    if (table->entry_tail_offset == 0)
     {
-        table->entry_head = entry;
-        table->entry_tail = entry;
-        flush_range(&table->entry_head, sizeof(void *) * 2);
+        table->entry_head_offset = entry_offset;
+        table->entry_tail_offset = entry_offset;
+        flush_range(&table->entry_head_offset, sizeof(size_t) * 2);
     }
     else
     {
-        WALEntry *old_tail = table->entry_tail;
-        old_tail->next = entry;
-        flush_range(&old_tail->next, sizeof(void *));
-        table->entry_tail = entry;
-        flush_range(&table->entry_tail, sizeof(void *));
+        WALEntry *old_tail = OFFSET_TO_PTR(table->entry_tail_offset, WALEntry);
+        old_tail->next_offset = entry_offset;
+        flush_range(&old_tail->next_offset, sizeof(size_t));
+        table->entry_tail_offset = entry_offset;
+        flush_range(&table->entry_tail_offset, sizeof(size_t));
     }
 
     pthread_mutex_unlock(&table->mutex);
@@ -119,7 +126,7 @@ void wal_advance_commit_ptr(int table_id, int txn_id)
 
     WALTable *table = wal_tables[table_id];
     pthread_mutex_lock(&table->mutex);
-    atomic_write_64(&table->commit_ptr, (uint64_t)table->entry_tail);
+    atomic_write_64(&table->commit_offset, (uint64_t)table->entry_tail_offset);
     pthread_mutex_unlock(&table->mutex);
 }
 
@@ -134,26 +141,28 @@ void wal_show_data()
         pthread_mutex_lock(&table->mutex);
 
         printf("\n--- WAL for Table ID: %d ---\n", table->table_id);
-        printf("Head: %p | Tail: %p | Commit Ptr: %p\n",
-               table->entry_head, table->entry_tail, table->commit_ptr);
+        printf("Head: %zu | Tail: %zu | Commit: %zu\n",
+               table->entry_head_offset, table->entry_tail_offset, table->commit_offset);
 
-        WALEntry *current = table->entry_head;
+        WALEntry *current = OFFSET_TO_PTR(table->entry_head_offset, WALEntry);
+        size_t commit_offset = table->commit_offset;
         int entry_count = 0;
         while (current != NULL)
         {
-            printf("  Entry %d [%p]: Key: %d | Op: %s | Data@: %p (Size: %zu) | Next: %p %s\n",
+            size_t current_offset = PTR_TO_OFFSET(current);
+            printf("  Entry %d [%zu]: Key: %d | Op: %s | Data@: %zu (Size: %zu) | Next: %zu %s\n",
                    entry_count++,
-                   current,
+                   current_offset,
                    current->key,
                    current->op_flag ? "Insert" : "Delete",
-                   current->data_ptr,
+                   current->data_offset,
                    current->data_size,
-                   current->next,
-                   (current == table->commit_ptr) ? "<-- COMMITTED" : "");
+                   current->next_offset,
+                   (current_offset == commit_offset) ? "<-- COMMITTED" : "");
 
-            if (current == table->entry_tail)
+            if (current_offset == table->entry_tail_offset)
                 break; // Safety break
-            current = current->next;
+            current = OFFSET_TO_PTR(current->next_offset, WALEntry);
         }
         pthread_mutex_unlock(&table->mutex);
     }
@@ -174,10 +183,10 @@ void wal_replay_log_for_table(Table *table)
 
     pthread_mutex_lock(&wal_table->mutex);
 
-    WALEntry *current = wal_table->entry_head;
-    WALEntry *commit_point = wal_table->commit_ptr;
+    WALEntry *current = OFFSET_TO_PTR(wal_table->entry_head_offset, WALEntry);
+    size_t commit_offset = wal_table->commit_offset;
 
-    if (commit_point == NULL)
+    if (commit_offset == 0)
     {
         printf("No committed entries for Table %d. Nothing to replay.\n", table->table_id);
         pthread_mutex_unlock(&wal_table->mutex);
@@ -187,6 +196,8 @@ void wal_replay_log_for_table(Table *table)
     // Replay all entries up to and including the commit point
     while (current != NULL)
     {
+        void *data_ptr = OFFSET_TO_PTR(current->data_offset, void);
+        
         if (current->op_flag == 1)
         { // Insert operation
             // This is a simplified insert, it doesn't handle splits correctly
@@ -194,22 +205,35 @@ void wal_replay_log_for_table(Table *table)
             // A more robust implementation would reuse the full db_put_row logic.
             int up_key;
             BPTreeNode *new_node = NULL;
-            insert_recursive(table->index, table->index->root, current->key, current->data_ptr, current->data_size, &up_key, &new_node);
-            // Note: We are not handling root splits during recovery for simplicity.
-            // This assumes the tree structure was simple before the crash.
-            // A full ARIES implementation would log physical changes to handle this.
+            bool inserted = insert_recursive(table->index, table->index->root, current->key, data_ptr, current->data_size, &up_key, &new_node);
+            
+            if (inserted) {
+                // Handle root split if necessary
+                if (new_node != NULL) {
+                    BPTreeNode *new_root = create_node(false);
+                    new_root->keys[0] = up_key;
+                    new_root->children[0] = table->index->root;
+                    new_root->children[1] = new_node;
+                    new_root->num_keys = 1;
+                    table->index->root = new_root;
+                    table->index->height++;
+                    table->index->node_count++;
+                }
+                table->index->record_count++;
+            }
         }
         else
         { // Delete operation
             remove_recursive(table->index, table->index->root, current->key, NULL, 0);
         }
 
-        if (current == commit_point)
+        size_t current_offset = PTR_TO_OFFSET(current);
+        if (current_offset == commit_offset)
         {
             printf("Reached commit point for Table %d. Replay complete.\n", table->table_id);
             break;
         }
-        current = current->next;
+        current = OFFSET_TO_PTR(current->next_offset, WALEntry);
     }
     pthread_mutex_unlock(&wal_table->mutex);
 }

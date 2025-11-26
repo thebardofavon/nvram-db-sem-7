@@ -1,0 +1,3 @@
+USE TABLE test_persist
+GET ROW 10
+EXIT

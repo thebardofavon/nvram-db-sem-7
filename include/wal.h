@@ -14,20 +14,21 @@ typedef enum {
 } WALOperation;
 
 // WAL Entry Structure
+// WAL Entry Structure
 typedef struct WALEntry {
     WALOperation op_flag;   // Operation type (WAL_INSERT or WAL_DELETE)
     int key;                // Key of row/data
-    void *data_ptr;         // Pointer to actual data in NVRAM
+    size_t data_offset;     // Offset to actual data in NVRAM (relative to nvram_map)
     size_t data_size;       // Size of the data
-    struct WALEntry *next;  // Pointer to next WAL entry (this is an NVRAM pointer)
+    size_t next_offset;     // Offset to next WAL entry (relative to nvram_map)
 } WALEntry;
 
 // WAL Table Structure (This entire structure lives in NVRAM)
 typedef struct WALTable {
     int table_id;           // Unique Table ID
-    WALEntry *entry_head;   // NVRAM Pointer to first WAL entry
-    WALEntry *entry_tail;   // NVRAM Pointer to last WAL entry (for fast append)
-    WALEntry *commit_ptr;   // NVRAM Commit pointer (points to last committed entry)
+    size_t entry_head_offset; // Offset to first WAL entry
+    size_t entry_tail_offset; // Offset to last WAL entry
+    size_t commit_offset;     // Offset to last committed entry
     pthread_mutex_t mutex;  // Mutex for thread-safe WAL operations
 } WALTable;
 

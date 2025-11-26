@@ -8,6 +8,7 @@
 #include "../include/ram_bptree.h"
 #include "../include/free_space.h"
 #include "../include/wal.h"
+#include <signal.h>
 #define PORT 8080
 #define BUFFER_SIZE 1024
 #define CHECKPOINT_INTERVAL_S 30 // Checkpoint every 30 seconds
@@ -228,6 +229,20 @@ void *checkpoint_thread_func(void *arg) {
     }
     return NULL;
 }
+
+// Global server socket for cleanup in signal handler
+int g_server_socket = -1;
+
+void handle_signal(int sig) {
+    (void)sig;
+    printf("\nCaught signal, shutting down...\n");
+    if (g_server_socket >= 0) {
+        close(g_server_socket);
+    }
+    db_shutdown();
+    exit(0);
+}
+
 int main()
 {
     db_startup();
@@ -243,6 +258,11 @@ int main()
 
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) { perror("socket"); exit(1); }
+    g_server_socket = server_socket;
+
+    // Register signal handlers
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
 
     int opt = 1;
     setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
